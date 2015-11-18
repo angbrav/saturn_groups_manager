@@ -9,4 +9,10 @@ compile: deps
 deps:
 	$(REBAR) get-deps
 
+rel: all
+	$(REBAR) generate
+
+relclean:
+	rm -rf rel/saturn_groups_manager
+
 include tools.mk
