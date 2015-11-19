@@ -15,6 +15,10 @@
          new_node/2,
          set_myid/1,
          filter_stream_leaf/1,
+         new_treefile/1,
+         new_groupsfile/1,
+         set_treedict/2,
+         set_groupsdict/1,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -45,6 +49,19 @@ set_myid(MyId) ->
 
 filter_stream_leaf(Stream) ->
     gen_server:call(?MODULE, {filter_stream_leaf, Stream}, infinity).
+
+new_treefile(File) ->
+    gen_server:call(?MODULE, {new_treefile, File}, infinity).
+
+new_groupsfile(File) ->
+    gen_server:call(?MODULE, {new_groupsfile, File}, infinity).
+
+set_treedict(Dict, NLeaves) ->
+    gen_server:call(?MODULE, {set_treedict, Dict, NLeaves}, infinity).
+
+set_groupsdict(Dict) ->
+    gen_server:call(?MODULE, {set_groupsdict, Dict}, infinity).
+    
     
 init([]) ->
     {ok, GroupsFile} = file:open(?GROUPSFILE, [read]),
@@ -66,6 +83,36 @@ init([]) ->
     end,
     file:close(TreeFile),
     {ok, S1#state{map=dict:new()}}.
+
+handle_call({set_treedict, Tree, Leaves}, _From, S0) ->
+    Paths = path_from_tree_dict(Tree, Leaves),
+    {reply, ok, S0#state{paths=Paths, tree=Tree, nleaves=Leaves}};
+
+handle_call({set_groupsdict, RGroups}, _From, S0) ->
+    {reply, ok, S0#state{groups=RGroups}};
+
+handle_call({new_groupsfile, File}, _From, S0) ->
+    {ok, GroupsFile} = file:open(File, [read]),
+    RGroups = replication_groups_from_file(GroupsFile, dict:new()),
+    file:close(GroupsFile),
+    {reply, ok, S0#state{groups=RGroups}};
+
+handle_call({new_treefile, File}, _From, _S0) ->
+    {ok, TreeFile} = file:open(File, [read]),
+    case file:read_line(TreeFile) of
+        eof ->
+            lager:error("Empty file: ~p", [File]),
+            S1 = #state{paths=dict:new(), tree=dict:new(), nleaves=0};
+        {error, Reason} ->
+            lager:error("Problem reading ~p file, reason: ~p", [File, Reason]),
+            S1 = #state{paths=dict:new(), tree=dict:new(), nleaves=0};
+        {ok, Line} ->
+            {NLeaves, []} = string:to_integer(hd(string:tokens(Line, "\n"))),
+            {Tree, Paths} = tree_from_file(TreeFile, 0, NLeaves, dict:new(), dict:new()),
+            S1 = #state{paths=Paths, tree=Tree, nleaves=NLeaves}
+    end,
+    file:close(TreeFile),
+    {reply, ok, S1};
 
 handle_call({set_myid, MyId}, _From, S0) ->
     {reply, ok, S0#state{myid=MyId}};
@@ -102,8 +149,10 @@ handle_call({get_datanodes, Key}, _From, S0=#state{groups=RGroups, map=Map, myid
                                             Acc;
                                         _ ->
                                             case dict:find(Id, Map) of
-                                                {ok, Value} -> Acc ++ [Value];
-                                                error -> Acc
+                                                {ok, {Host,Port}} ->
+                                                    Acc ++ [{Host, Port}];
+                                                error -> 
+                                                    Acc
                                             end
                                     end
                                 end, [], Value),
@@ -155,7 +204,7 @@ handle_call({get_metadatanodes, Key}, _From, S0=#state{groups=_RGroups, map=Map,
                                     case interested(Id, Key, MyId, S0) of
                                         true ->
                                             case dict:find(Id, Map) of
-                                                {ok, Value} -> Acc ++ [Value];
+                                                {ok, {Host, Port}} -> Acc ++ [{Host, Port}];
                                                 error -> Acc
                                             end;
                                         false ->
@@ -284,6 +333,24 @@ tree_from_file(Device, Counter, LeavesLeft, Tree0, Path0)->
                     tree_from_file(Device, Counter + 1, LeavesLeft - 1, Tree1, Path0)
             end
     end.
+   
+path_from_tree_dict(Tree, Leaves) ->
+    lists:foldl(fun({Id, Row}, Paths0) ->
+                    case (Id >= Leaves) of
+                        true ->
+                            {OneHopPath, _} = lists:foldl(fun(Elem, {Acc, C}) ->
+                                                            case Elem of
+                                                                -1 ->
+                                                                    {Acc, C+1};
+                                                                _ ->
+                                                                    {Acc ++ [C], C+1}
+                                                             end
+                                                           end, {[], 0}, Row),
+                            dict:store(Id, OneHopPath, Paths0);
+                        false ->
+                            Paths0
+                    end
+                end, dict:new(), dict:to_list(Tree)).
 
 is_leaf(Id, Total) ->
     Id<Total.
@@ -377,6 +444,17 @@ tree_from_file_test() ->
             ?assertEqual([-1,-1,13,14,-1],dict:fetch(4, Tree))
     end,
     file:close(TreeFile).
+
+path_from_tree_dict_test() ->
+    P1 = dict:store(0,[-1,1,2,3,-1],dict:new()),
+    P2 = dict:store(1,[4,-1,5,6,-1],P1),
+    P3 = dict:store(2,[7,8,-1,-1,9],P2),
+    P4 = dict:store(3,[10,11,-1,-1,12],P3),
+    P5 = dict:store(4,[-1,-1,13,14,-1],P4),
+    Paths = path_from_tree_dict(P5, 3),
+    ?assertEqual(2,length(dict:fetch_keys(Paths))),
+    ?assertEqual([0,1,4],dict:fetch(3, Paths)),
+    ?assertEqual([2,3],dict:fetch(4, Paths)).
 
 is_leaf_test() ->
     ?assertEqual(true, is_leaf(3, 4)),
