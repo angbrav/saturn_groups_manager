@@ -11,13 +11,14 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([get_datanodes/1,
-         get_metadatanodes/2,
+         get_hostport/1,
          new_node/2,
          set_myid/1,
          filter_stream_leaf/1,
          new_treefile/1,
          new_groupsfile/1,
          set_treedict/2,
+         interested/2,
          set_groupsdict/1,
          do_replicate/1]).
 
@@ -38,8 +39,11 @@ do_replicate(Key) ->
 get_datanodes(Key) ->
     gen_server:call(?MODULE, {get_datanodes, Key}, infinity).
 
-get_metadatanodes(Key, Id) ->
-    gen_server:call(?MODULE, {get_metadatanodes, Key, Id}, infinity).
+interested(Id, Key) ->
+    gen_server:call(?MODULE, {interested, Id, Key}, infinity).
+
+get_hostport(Id) ->
+    gen_server:call(?MODULE, {get_hostport, Id}, infinity).
 
 new_node(Id, HostPort) ->
     gen_server:call(?MODULE, {new_node, Id, HostPort}, infinity).
@@ -174,44 +178,22 @@ handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=N
                             end
                           end, [], Stream0),
     IndexNode = case dict:find(Internal, Map) of
-                    {ok, Value} -> Value;
+                    {ok, {Host, Port}} -> {Host, Port};
                     error ->
                         lager:error("The id: ~p is not in the map ~p",[Internal, dict:fetch_keys(Map)]),
                         no_indexnode
                 end,
     {reply, {ok, Stream1, IndexNode}, S0};
 
-handle_call({get_metadatanodes, Key}, _From, S0=#state{groups=_RGroups, map=Map, tree=Tree, paths=Paths, nleaves=NLeaves, myid=MyId}) ->
-    Row = dict:fetch(MyId, Tree),
-    case is_leaf(MyId, NLeaves) of
-        true ->
-            Internal = find_internal(Row, 0, NLeaves),
-            case interested(Internal, Key, MyId, S0) of
-                true ->
-                    {reply, {ok, dict:fetch(Internal, Map)}, S0};
-                false ->
-                    {reply, {ok, []}, S0}
-            end;
-        false ->
-            Links = dict:fetch(MyId, Paths),
-            FilteredLinks = lists:foldl(fun(Elem, Acc) ->
-                                        case Elem of
-                                            MyId -> Acc;
-                                            _ -> Acc ++ [Elem]
-                                        end 
-                                       end, [], Links),
-            Group = lists:foldl(fun(Id, Acc) ->
-                                    case interested(Id, Key, MyId, S0) of
-                                        true ->
-                                            case dict:find(Id, Map) of
-                                                {ok, {Host, Port}} -> Acc ++ [{Host, Port}];
-                                                error -> Acc
-                                            end;
-                                        false ->
-                                            Acc
-                                    end
-                                end, [], FilteredLinks),
-            {reply, {ok, Group}, S0}
+handle_call({interested, Id, Key}, _From, S0=#state{myid=MyId}) ->
+    {reply, {ok, interested(Id, Key, MyId, S0)}, S0};
+
+handle_call({get_hostport, Id}, _From, S0=#state{map=Map}) ->
+    case dict:find(Id, Map) of
+        {ok, {Host, Port}} ->
+            {reply, {ok, {Host, Port}}, S0};
+        error ->
+            {reply, {error, no_host}, S0}
     end.
 
 handle_cast(_Info, State) ->
