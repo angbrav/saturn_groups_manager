@@ -19,6 +19,7 @@
          new_groupsfile/1,
          set_treedict/2,
          interested/2,
+         get_mypath/0,
          set_groupsdict/1,
          do_replicate/1]).
 
@@ -33,6 +34,9 @@
 start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
+get_mypath() ->
+    gen_server:call(?MODULE, {get_mypath}, infinity).
+    
 do_replicate(Key) ->
     gen_server:call(?MODULE, {do_replicate, Key}, infinity).
 
@@ -88,6 +92,9 @@ init([]) ->
     file:close(TreeFile),
     {ok, S1#state{map=dict:new()}}.
 
+handle_call({get_mypath}, _From, S0=#state{myid=MyId, paths=Paths}) ->
+    {reply, {ok, dict:fetch(MyId, Paths)}, S0};
+    
 handle_call({set_treedict, Tree, Leaves}, _From, S0) ->
     Paths = path_from_tree_dict(Tree, Leaves),
     {reply, ok, S0#state{paths=Paths, tree=Tree, nleaves=Leaves}};
