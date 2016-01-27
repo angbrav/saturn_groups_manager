@@ -176,7 +176,7 @@ handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=N
     Row = dict:fetch(MyId, Tree),
     Internal = find_internal(Row, 0, NLeaves),
     Stream1 = lists:foldl(fun(Elem, Acc) ->
-                            {Key, _Clock, _Node} = Elem,
+                            Key = Elem#label.key,
                             case interested(Internal, Key, MyId, S0) of
                                 true ->
                                     Acc ++ [Elem];
