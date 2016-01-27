@@ -29,7 +29,6 @@
                 paths,
                 myid,
                 nleaves}).
-                
 
 start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
@@ -175,8 +174,7 @@ handle_call({get_datanodes, Key}, _From, S0=#state{groups=RGroups, map=Map, myid
 handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId, map=Map}) ->
     Row = dict:fetch(MyId, Tree),
     Internal = find_internal(Row, 0, NLeaves),
-    Stream1 = lists:foldl(fun(Elem, Acc) ->
-                            Key = Elem#label.key,
+    Stream1 = lists:foldl(fun({Key, Elem}, Acc) ->
                             case interested(Internal, Key, MyId, S0) of
                                 true ->
                                     Acc ++ [Elem];
