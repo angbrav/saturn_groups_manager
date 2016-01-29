@@ -21,6 +21,7 @@
          interested/2,
          get_mypath/0,
          set_groupsdict/1,
+         get_key_sample/0,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -68,6 +69,9 @@ set_treedict(Dict, NLeaves) ->
 
 set_groupsdict(Dict) ->
     gen_server:call(?MODULE, {set_groupsdict, Dict}, infinity).
+
+get_key_sample() ->
+    gen_server:call(?MODULE, get_key_sample, infinity).
     
     
 init([]) ->
@@ -93,6 +97,14 @@ init([]) ->
 
 handle_call({get_mypath}, _From, S0=#state{myid=MyId, paths=Paths}) ->
     {reply, {ok, dict:fetch(MyId, Paths)}, S0};
+
+handle_call(get_key_sample, _From, S0=#state{myid=MyId, groups=Groups}) ->
+    case find_key(dict:to_list(Groups), MyId) of
+        {ok, Key} -> 
+            {reply, {ok, Key}, S0};
+        {error, not_found} ->
+            {reply, {error, not_found}, S0}
+    end;
     
 handle_call({set_treedict, Tree, Leaves}, _From, S0) ->
     Paths = path_from_tree_dict(Tree, Leaves),
@@ -353,6 +365,17 @@ find_internal([H|T], Counter, NLeaves) ->
                 false ->
                     find_internal(T, Counter+1, NLeaves)
             end
+    end.
+
+find_key([], _MyId) ->
+    {error, not_found};
+
+find_key([{Key, Ids}|Rest], MyId) ->
+    case lists:member(MyId, Ids) of
+        true ->
+            {ok, Key};
+        false ->
+            find_key(Rest, MyId)
     end.
 
 -ifdef(TEST).
