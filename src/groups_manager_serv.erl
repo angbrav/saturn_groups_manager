@@ -21,7 +21,7 @@
          interested/2,
          get_mypath/0,
          set_groupsdict/1,
-         get_key_sample/0,
+         get_bucket_sample/0,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -37,14 +37,14 @@ start_link() ->
 get_mypath() ->
     gen_server:call(?MODULE, {get_mypath}, infinity).
     
-do_replicate(Key) ->
-    gen_server:call(?MODULE, {do_replicate, Key}, infinity).
+do_replicate(BKey) ->
+    gen_server:call(?MODULE, {do_replicate, BKey}, infinity).
 
-get_datanodes(Key) ->
-    gen_server:call(?MODULE, {get_datanodes, Key}, infinity).
+get_datanodes(BKey) ->
+    gen_server:call(?MODULE, {get_datanodes, BKey}, infinity).
 
-interested(Id, Key) ->
-    gen_server:call(?MODULE, {interested, Id, Key}, infinity).
+interested(Id, BKey) ->
+    gen_server:call(?MODULE, {interested, Id, BKey}, infinity).
 
 get_hostport(Id) ->
     gen_server:call(?MODULE, {get_hostport, Id}, infinity).
@@ -70,8 +70,8 @@ set_treedict(Dict, NLeaves) ->
 set_groupsdict(Dict) ->
     gen_server:call(?MODULE, {set_groupsdict, Dict}, infinity).
 
-get_key_sample() ->
-    gen_server:call(?MODULE, get_key_sample, infinity).
+get_bucket_sample() ->
+    gen_server:call(?MODULE, get_bucket_sample, infinity).
     
     
 init([]) ->
@@ -98,10 +98,10 @@ init([]) ->
 handle_call({get_mypath}, _From, S0=#state{myid=MyId, paths=Paths}) ->
     {reply, {ok, dict:fetch(MyId, Paths)}, S0};
 
-handle_call(get_key_sample, _From, S0=#state{myid=MyId, groups=Groups}) ->
+handle_call(get_bucket_sample, _From, S0=#state{myid=MyId, groups=Groups}) ->
     case find_key(dict:to_list(Groups), MyId) of
-        {ok, Key} -> 
-            {reply, {ok, Key}, S0};
+        {ok, Bucket} -> 
+            {reply, {ok, Bucket}, S0};
         {error, not_found} ->
             {reply, {error, not_found}, S0}
     end;
@@ -149,8 +149,9 @@ handle_call({new_node, Id, HostPort}, _From, S0=#state{map=Map0}) ->
             {reply, ok, S0#state{map=Map1}}
     end;
 
-handle_call({do_replicate, Key}, _From, S0=#state{groups=RGroups, myid=MyId}) ->
-    case dict:find(Key, RGroups) of
+handle_call({do_replicate, BKey}, _From, S0=#state{groups=RGroups, myid=MyId}) ->
+    {Bucket, _Key} = BKey,
+    case dict:find(Bucket, RGroups) of
         {ok, Value} ->
             case contains(MyId, Value) of
                 true ->
@@ -162,8 +163,9 @@ handle_call({do_replicate, Key}, _From, S0=#state{groups=RGroups, myid=MyId}) ->
             {reply, {error, unknown_key}, S0}
     end;
         
-handle_call({get_datanodes, Key}, _From, S0=#state{groups=RGroups, map=Map, myid=MyId}) ->
-    case dict:find(Key, RGroups) of
+handle_call({get_datanodes, BKey}, _From, S0=#state{groups=RGroups, map=Map, myid=MyId}) ->
+    {Bucket, _Key} = BKey,
+    case dict:find(Bucket, RGroups) of
         {ok, Value} ->
             Group = lists:foldl(fun(Id, Acc) ->
                                     case Id of
@@ -186,8 +188,9 @@ handle_call({get_datanodes, Key}, _From, S0=#state{groups=RGroups, map=Map, myid
 handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId, map=Map}) ->
     Row = dict:fetch(MyId, Tree),
     Internal = find_internal(Row, 0, NLeaves),
-    Stream1 = lists:foldl(fun({Key, Elem}, Acc) ->
-                            case interested(Internal, Key, MyId, S0) of
+    Stream1 = lists:foldl(fun({BKey, Elem}, Acc) ->
+                            {Bucket, _Key} = BKey,
+                            case interested(Internal, Bucket, MyId, S0) of
                                 true ->
                                     Acc ++ [Elem];
                                 false ->
@@ -202,8 +205,9 @@ handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=N
                 end,
     {reply, {ok, Stream1, IndexNode}, S0};
 
-handle_call({interested, Id, Key}, _From, S0=#state{myid=MyId}) ->
-    {reply, {ok, interested(Id, Key, MyId, S0)}, S0};
+handle_call({interested, Id, BKey}, _From, S0=#state{myid=MyId}) ->
+    {Bucket, _Key} = BKey,
+    {reply, {ok, interested(Id, Bucket, MyId, S0)}, S0};
 
 handle_call({get_hostport, Id}, _From, S0=#state{map=Map}) ->
     case dict:find(Id, Map) of
@@ -226,8 +230,8 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%private
-interested(Id, Key, PreId, S0=#state{groups=RGroups, nleaves=NLeaves, paths=Paths}) ->
-    Group = dict:fetch(Key, RGroups),
+interested(Id, Bucket, PreId, S0=#state{groups=RGroups, nleaves=NLeaves, paths=Paths}) ->
+    Group = dict:fetch(Bucket, RGroups),
     case is_leaf(Id, NLeaves) of
         true ->
             contains(Id, Group);
