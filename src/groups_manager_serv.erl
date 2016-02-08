@@ -157,6 +157,7 @@ handle_call({do_replicate, BKey}, _From, S0=#state{groups=RGroups, myid=MyId}) -
                 true ->
                     {reply, true, S0};
                 false ->
+                    lager:info("Node: ~p does not replicate: ~p (Replicas: ~p)", [MyId, BKey, Value]),
                     {reply, false, S0}
             end;
         error ->
