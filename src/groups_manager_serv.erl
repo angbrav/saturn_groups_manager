@@ -11,10 +11,12 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([get_datanodes/1,
+         get_datanodes_ids/1,
          get_hostport/1,
          new_node/2,
          set_myid/1,
          filter_stream_leaf/1,
+         filter_stream_leaf_id/1,
          new_treefile/1,
          new_groupsfile/1,
          set_treedict/2,
@@ -22,6 +24,7 @@
          get_mypath/0,
          set_groupsdict/1,
          get_bucket_sample/0,
+         is_leaf/1,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -34,6 +37,9 @@
 start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
+is_leaf(Id) ->
+    gen_server:call(?MODULE, {is_leaf, Id}, infinity).
+
 get_mypath() ->
     gen_server:call(?MODULE, {get_mypath}, infinity).
     
@@ -42,6 +48,9 @@ do_replicate(BKey) ->
 
 get_datanodes(BKey) ->
     gen_server:call(?MODULE, {get_datanodes, BKey}, infinity).
+
+get_datanodes_ids(BKey) ->
+    gen_server:call(?MODULE, {get_datanodes_ids, BKey}, infinity).
 
 interested(Id, BKey) ->
     gen_server:call(?MODULE, {interested, Id, BKey}, infinity).
@@ -57,6 +66,9 @@ set_myid(MyId) ->
 
 filter_stream_leaf(Stream) ->
     gen_server:call(?MODULE, {filter_stream_leaf, Stream}, infinity).
+
+filter_stream_leaf_id(Stream) ->
+    gen_server:call(?MODULE, {filter_stream_leaf_id, Stream}, infinity).
 
 new_treefile(File) ->
     gen_server:call(?MODULE, {new_treefile, File}, infinity).
@@ -139,6 +151,9 @@ handle_call({new_treefile, File}, _From, _S0) ->
 handle_call({set_myid, MyId}, _From, S0) ->
     {reply, ok, S0#state{myid=MyId}};
 
+handle_call({is_leaf, Id}, _From, S0=#state{nleaves=NLeaves}) ->
+    {reply, {ok, is_leaf(Id, NLeaves)}, S0};
+
 handle_call({new_node, Id, HostPort}, _From, S0=#state{map=Map0}) ->
     case dict:find(Id, Map0) of
         {ok, _Value} ->
@@ -185,6 +200,37 @@ handle_call({get_datanodes, BKey}, _From, S0=#state{groups=RGroups, map=Map, myi
         error ->
             {reply, {error, unknown_key}, S0}
     end;
+
+handle_call({get_datanodes_ids, BKey}, _From, S0=#state{groups=RGroups, myid=MyId}) ->
+    {Bucket, _Key} = BKey,
+    case dict:find(Bucket, RGroups) of
+        {ok, Value} ->
+            Group = lists:foldl(fun(Id, Acc) ->
+                                    case Id of
+                                        MyId ->
+                                            Acc;
+                                        _ ->
+                                            Acc ++ [Id]
+                                    end
+                                end, [], Value),
+            {reply, {ok, Group}, S0};
+        error ->
+            {reply, {error, unknown_key}, S0}
+    end;
+
+handle_call({filter_stream_leaf_id, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId}) ->
+    Row = dict:fetch(MyId, Tree),
+    Internal = find_internal(Row, 0, NLeaves),
+    Stream1 = lists:foldl(fun({BKey, Elem}, Acc) ->
+                            {Bucket, _Key} = BKey,
+                            case interested(Internal, Bucket, MyId, S0) of
+                                true ->
+                                    Acc ++ [Elem];
+                                false ->
+                                    Acc
+                            end
+                          end, [], Stream0),
+    {reply, {ok, Stream1, Internal}, S0};
 
 handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId, map=Map}) ->
     Row = dict:fetch(MyId, Tree),
