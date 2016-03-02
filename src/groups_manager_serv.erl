@@ -25,6 +25,7 @@
          set_groupsdict/1,
          get_bucket_sample/0,
          is_leaf/1,
+         get_closest_dcid/1,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -51,6 +52,9 @@ get_datanodes(BKey) ->
 
 get_datanodes_ids(BKey) ->
     gen_server:call(?MODULE, {get_datanodes_ids, BKey}, infinity).
+
+get_closest_dcid(BKey) ->
+    gen_server:call(?MODULE, {get_closest_dcid, BKey}, infinity).
 
 interested(Id, BKey) ->
     gen_server:call(?MODULE, {interested, Id, BKey}, infinity).
@@ -200,6 +204,31 @@ handle_call({get_datanodes, BKey}, _From, S0=#state{groups=RGroups, map=Map, myi
         error ->
             {reply, {error, unknown_key}, S0}
     end;
+
+handle_call({get_closets_dcid, BKey}, _From, S0=#state{groups=RGroups, myid=MyId, tree=Tree}) ->
+    {Bucket, _Key} = BKey,
+    case dict:find(Bucket, RGroups) of
+        {ok, Value} ->
+            {ClosestId, _} = lists:foldl(fun(Id, {_IdClosest, D0}=Acc) ->
+                                            D1 = distance_datanodes(Tree, MyId, Id),
+                                            case D0 of
+                                                max -> {Id, D1};
+                                                _ -> case (D1 > D0) of
+                                                        true -> Acc;
+                                                        false -> {Id, D1}
+                                                     end
+                                            end
+                                         end, {noid, max}, Value),
+            case ClosestId of
+                noid ->
+                    {reply, {error, no_replica_found}, S0};
+                _ ->
+                    {reply, {ok, ClosestId}, S0}
+            end;
+        error ->
+            {reply, {error, unknown_key}, S0}
+    end;
+
 
 handle_call({get_datanodes_ids, BKey}, _From, S0=#state{groups=RGroups, myid=MyId}) ->
     {Bucket, _Key} = BKey,
@@ -429,7 +458,20 @@ find_key([{Key, Ids}|Rest], MyId) ->
             find_key(Rest, MyId)
     end.
 
+distance_datanodes(Tree, MyId, Id) ->
+    Row = dict:fetch(MyId, Tree),
+    lists:nth(Id+1, Row).
+
 -ifdef(TEST).
+distance_datanodes_test() ->
+    P1 = dict:store(0,[-1,1,2,3,-1],dict:new()),
+    P2 = dict:store(1,[4,-1,5,6,-1],P1),
+    P3 = dict:store(2,[7,8,-1,-1,9],P2),
+    P4 = dict:store(3,[10,11,-1,-1,12],P3),
+    P5 = dict:store(4,[-1,-1,13,14,-1],P4),
+    D = distance_datanodes(P5, 1, 2),
+    ?assertEqual(5, D).
+    
 interested_test() ->
     P1 = dict:store(6,[0,1,7],dict:new()),
     P2 = dict:store(7,[2,6,10],P1),
