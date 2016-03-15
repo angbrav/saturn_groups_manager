@@ -26,6 +26,7 @@
          get_bucket_sample/0,
          is_leaf/1,
          get_closest_dcid/1,
+         get_all_nodes/0,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -88,6 +89,9 @@ set_groupsdict(Dict) ->
 
 get_bucket_sample() ->
     gen_server:call(?MODULE, get_bucket_sample, infinity).
+
+get_all_nodes() ->
+    gen_server:call(?MODULE, get_all_nodes, infinity).
     
     
 init([]) ->
@@ -110,6 +114,10 @@ init([]) ->
     end,
     file:close(TreeFile),
     {ok, S1#state{map=dict:new()}}.
+
+handle_call({get_all_nodes}, _From, S0=#state{tree=Tree, myid=MyId}) ->
+    Nodes = dict:fetch_keys(Tree),
+    {reply, {ok, lists:delete(MyId, Nodes)}, S0};
 
 handle_call({get_mypath}, _From, S0=#state{myid=MyId, paths=Paths}) ->
     {reply, {ok, dict:fetch(MyId, Paths)}, S0};
@@ -205,7 +213,7 @@ handle_call({get_datanodes, BKey}, _From, S0=#state{groups=RGroups, map=Map, myi
             {reply, {error, unknown_key}, S0}
     end;
 
-handle_call({get_closets_dcid, BKey}, _From, S0=#state{groups=RGroups, myid=MyId, tree=Tree}) ->
+handle_call({get_closest_dcid, BKey}, _From, S0=#state{groups=RGroups, myid=MyId, tree=Tree}) ->
     {Bucket, _Key} = BKey,
     case dict:find(Bucket, RGroups) of
         {ok, Value} ->
