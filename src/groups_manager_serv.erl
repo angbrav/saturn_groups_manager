@@ -119,11 +119,11 @@ init([]) ->
     file:close(TreeFile),
     {ok, S1#state{map=dict:new()}}.
 
-handle_call({get_all_nodes_but_myself}, _From, S0=#state{tree=Tree, myid=MyId}) ->
+handle_call(get_all_nodes_but_myself, _From, S0=#state{tree=Tree, myid=MyId}) ->
     Nodes = dict:fetch_keys(Tree),
     {reply, {ok, lists:delete(MyId, Nodes)}, S0};
 
-handle_call({get_all_nodes}, _From, S0=#state{tree=Tree}) ->
+handle_call(get_all_nodes, _From, S0=#state{tree=Tree}) ->
     Nodes = dict:fetch_keys(Tree),
     {reply, {ok, Nodes}, S0};
 
