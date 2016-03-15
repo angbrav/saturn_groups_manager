@@ -27,6 +27,7 @@
          is_leaf/1,
          get_closest_dcid/1,
          get_all_nodes/0,
+         get_all_nodes_but_myself/0,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -92,6 +93,9 @@ get_bucket_sample() ->
 
 get_all_nodes() ->
     gen_server:call(?MODULE, get_all_nodes, infinity).
+
+get_all_nodes_but_myself() ->
+    gen_server:call(?MODULE, get_all_nodes_but_myself, infinity).
     
     
 init([]) ->
@@ -115,9 +119,13 @@ init([]) ->
     file:close(TreeFile),
     {ok, S1#state{map=dict:new()}}.
 
-handle_call({get_all_nodes}, _From, S0=#state{tree=Tree, myid=MyId}) ->
+handle_call({get_all_nodes_but_myself}, _From, S0=#state{tree=Tree, myid=MyId}) ->
     Nodes = dict:fetch_keys(Tree),
     {reply, {ok, lists:delete(MyId, Nodes)}, S0};
+
+handle_call({get_all_nodes}, _From, S0=#state{tree=Tree}) ->
+    Nodes = dict:fetch_keys(Tree),
+    {reply, {ok, Nodes}, S0};
 
 handle_call({get_mypath}, _From, S0=#state{myid=MyId, paths=Paths}) ->
     {reply, {ok, dict:fetch(MyId, Paths)}, S0};
