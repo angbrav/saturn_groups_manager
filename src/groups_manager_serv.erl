@@ -100,7 +100,9 @@ get_all_nodes_but_myself() ->
     
 init([]) ->
     {ok, GroupsFile} = file:open(?GROUPSFILE, [read]),
-    RGroups = replication_groups_from_file(GroupsFile, dict:new()),
+    Name = list_to_atom(atom_to_list(node()) ++ atom_to_list(rgroups_saturn)),
+    RGroups = ets:new(Name, [set, named_table]),
+    ok = replication_groups_from_file(GroupsFile, RGroups),
     file:close(GroupsFile),
      
     {ok, TreeFile} = file:open(?TREEFILE, [read]),
@@ -131,7 +133,7 @@ handle_call({get_mypath}, _From, S0=#state{myid=MyId, paths=Paths}) ->
     {reply, {ok, dict:fetch(MyId, Paths)}, S0};
 
 handle_call(get_bucket_sample, _From, S0=#state{myid=MyId, groups=Groups}) ->
-    case find_key(dict:to_list(Groups), MyId) of
+    case find_key(ets:first(Groups), Groups, MyId) of
         {ok, Bucket} -> 
             {reply, {ok, Bucket}, S0};
         {error, not_found} ->
@@ -142,14 +144,19 @@ handle_call({set_treedict, Tree, Leaves}, _From, S0) ->
     Paths = path_from_tree_dict(Tree, Leaves),
     {reply, ok, S0#state{paths=Paths, tree=Tree, nleaves=Leaves}};
 
-handle_call({set_groupsdict, RGroups}, _From, S0) ->
-    {reply, ok, S0#state{groups=RGroups}};
+handle_call({set_groupsdict, RGroups}, _From, S0=#state{groups=Groups}) ->
+    true = ets:delete_all_objects(Groups),
+    lists:foreach(fun(Item) ->
+                    true = ets:insert(Groups, Item)
+                  end, dict:to_list(RGroups)),
+    {reply, ok, S0};
 
-handle_call({new_groupsfile, File}, _From, S0) ->
+handle_call({new_groupsfile, File}, _From, S0=#state{groups=Groups}) ->
     {ok, GroupsFile} = file:open(File, [read]),
-    RGroups = replication_groups_from_file(GroupsFile, dict:new()),
+    true = ets:delete_all_objects(Groups),
+    ok = replication_groups_from_file(GroupsFile, Groups),
     file:close(GroupsFile),
-    {reply, ok, S0#state{groups=RGroups}};
+    {reply, ok, S0};
 
 handle_call({new_treefile, File}, _From, _S0) ->
     {ok, TreeFile} = file:open(File, [read]),
@@ -184,25 +191,27 @@ handle_call({new_node, Id, HostPort}, _From, S0=#state{map=Map0}) ->
             {reply, ok, S0#state{map=Map1}}
     end;
 
-handle_call({do_replicate, BKey}, _From, S0=#state{groups=RGroups, myid=MyId}) ->
+handle_call({do_replicate, BKey}, _From, S0=#state{groups=Groups, myid=MyId}) ->
     {Bucket, _Key} = BKey,
-    case dict:find(Bucket, RGroups) of
-        {ok, Value} ->
+    case ets:lookup(Groups, Bucket) of 
+        [] ->
+            {reply, {error, unknown_key}, S0};
+        [{Bucket, Value}]->
             case contains(MyId, Value) of
                 true ->
                     {reply, true, S0};
                 false ->
                     lager:info("Node: ~p does not replicate: ~p (Replicas: ~p)", [MyId, BKey, Value]),
                     {reply, false, S0}
-            end;
-        error ->
-            {reply, {error, unknown_key}, S0}
+            end
     end;
         
-handle_call({get_datanodes, BKey}, _From, S0=#state{groups=RGroups, map=Map, myid=MyId}) ->
+handle_call({get_datanodes, BKey}, _From, S0=#state{groups=Groups, map=Map, myid=MyId}) ->
     {Bucket, _Key} = BKey,
-    case dict:find(Bucket, RGroups) of
-        {ok, Value} ->
+    case ets:lookup(Groups, Bucket) of
+        [] ->
+            {reply, {error, unknown_key}, S0};
+        [{Bucket, Value}] ->
             Group = lists:foldl(fun(Id, Acc) ->
                                     case Id of
                                         MyId ->
@@ -216,15 +225,15 @@ handle_call({get_datanodes, BKey}, _From, S0=#state{groups=RGroups, map=Map, myi
                                             end
                                     end
                                 end, [], Value),
-            {reply, {ok, Group}, S0};
-        error ->
-            {reply, {error, unknown_key}, S0}
+            {reply, {ok, Group}, S0}
     end;
 
-handle_call({get_closest_dcid, BKey}, _From, S0=#state{groups=RGroups, myid=MyId, tree=Tree}) ->
+handle_call({get_closest_dcid, BKey}, _From, S0=#state{groups=Groups, myid=MyId, tree=Tree}) ->
     {Bucket, _Key} = BKey,
-    case dict:find(Bucket, RGroups) of
-        {ok, Value} ->
+    case ets:lookup(Groups, Bucket) of
+        [] ->
+            {reply, {error, unknown_key}, S0};
+        [{Bucket, Value}] ->
             {ClosestId, _} = lists:foldl(fun(Id, {_IdClosest, D0}=Acc) ->
                                             D1 = distance_datanodes(Tree, MyId, Id),
                                             case D0 of
@@ -240,16 +249,16 @@ handle_call({get_closest_dcid, BKey}, _From, S0=#state{groups=RGroups, myid=MyId
                     {reply, {error, no_replica_found}, S0};
                 _ ->
                     {reply, {ok, ClosestId}, S0}
-            end;
-        error ->
-            {reply, {error, unknown_key}, S0}
+            end
     end;
 
 
-handle_call({get_datanodes_ids, BKey}, _From, S0=#state{groups=RGroups, myid=MyId}) ->
+handle_call({get_datanodes_ids, BKey}, _From, S0=#state{groups=Groups, myid=MyId}) ->
     {Bucket, _Key} = BKey,
-    case dict:find(Bucket, RGroups) of
-        {ok, Value} ->
+    case ets:lookup(Groups, Bucket) of
+        [] ->
+            {reply, {error, unknown_key}, S0};
+        [{Bucket, Value}] ->
             Group = lists:foldl(fun(Id, Acc) ->
                                     case Id of
                                         MyId ->
@@ -258,17 +267,15 @@ handle_call({get_datanodes_ids, BKey}, _From, S0=#state{groups=RGroups, myid=MyI
                                             Acc ++ [Id]
                                     end
                                 end, [], Value),
-            {reply, {ok, Group}, S0};
-        error ->
-            {reply, {error, unknown_key}, S0}
+            {reply, {ok, Group}, S0}
     end;
 
-handle_call({filter_stream_leaf_id, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId}) ->
+handle_call({filter_stream_leaf_id, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId, groups=Groups, paths=Paths}) ->
     Row = dict:fetch(MyId, Tree),
     Internal = find_internal(Row, 0, NLeaves),
     Stream1 = lists:foldl(fun({BKey, Elem}, Acc) ->
                             {Bucket, _Key} = BKey,
-                            case interested(Internal, Bucket, MyId, S0) of
+                            case interested(Internal, Bucket, MyId, Groups, NLeaves, Paths) of
                                 true ->
                                     Acc ++ [Elem];
                                 false ->
@@ -277,12 +284,12 @@ handle_call({filter_stream_leaf_id, Stream0}, _From, S0=#state{tree=Tree, nleave
                           end, [], Stream0),
     {reply, {ok, Stream1, Internal}, S0};
 
-handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId, map=Map}) ->
+handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId, map=Map, groups=Groups, paths=Paths}) ->
     Row = dict:fetch(MyId, Tree),
     Internal = find_internal(Row, 0, NLeaves),
     Stream1 = lists:foldl(fun({BKey, Elem}, Acc) ->
                             {Bucket, _Key} = BKey,
-                            case interested(Internal, Bucket, MyId, S0) of
+                            case interested(Internal, Bucket, MyId, Groups, NLeaves, Paths) of
                                 true ->
                                     Acc ++ [Elem];
                                 false ->
@@ -297,9 +304,9 @@ handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=N
                 end,
     {reply, {ok, Stream1, IndexNode}, S0};
 
-handle_call({interested, Id, BKey}, _From, S0=#state{myid=MyId}) ->
+handle_call({interested, Id, BKey}, _From, S0=#state{myid=MyId, groups=Groups, nleaves=NLeaves, paths=Paths}) ->
     {Bucket, _Key} = BKey,
-    {reply, {ok, interested(Id, Bucket, MyId, S0)}, S0};
+    {reply, {ok, interested(Id, Bucket, MyId, Groups, NLeaves, Paths)}, S0};
 
 handle_call({get_hostport, Id}, _From, S0=#state{map=Map}) ->
     case dict:find(Id, Map) of
@@ -322,8 +329,8 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%private
-interested(Id, Bucket, PreId, S0=#state{groups=RGroups, nleaves=NLeaves, paths=Paths}) ->
-    Group = dict:fetch(Bucket, RGroups),
+interested(Id, Bucket, PreId, Groups, NLeaves, Paths) ->
+    [{Bucket, Group}] = ets:lookup(Groups, Bucket),
     case is_leaf(Id, NLeaves) of
         true ->
             contains(Id, Group);
@@ -335,17 +342,17 @@ interested(Id, Bucket, PreId, S0=#state{groups=RGroups, nleaves=NLeaves, paths=P
                                             _ -> Acc ++ [Elem]
                                         end
                                        end, [], Links),
-            LinksExpanded = expand_links(FilteredLinks, Id, S0),
+            LinksExpanded = expand_links(FilteredLinks, Id, NLeaves, Paths),
             intersect(LinksExpanded, Group)
     end.
             
-expand_links([], _PreId, _S0) ->
+expand_links([], _PreId, _NLeaves, _Paths) ->
     [];
                
-expand_links([H|T], PreId, S0=#state{nleaves=NLeaves, paths=Paths}) ->
+expand_links([H|T], PreId, NLeaves, Paths) ->
     case is_leaf(H, NLeaves) of
         true ->
-            [H] ++ expand_links(T, PreId, S0);
+            [H] ++ expand_links(T, PreId, NLeaves, Paths);
         false ->
             ExtraPath = dict:fetch(H, Paths),
             FilteredExtraPath = lists:foldl(fun(Elem, Acc) ->
@@ -354,7 +361,7 @@ expand_links([H|T], PreId, S0=#state{nleaves=NLeaves, paths=Paths}) ->
                                                 _ -> Acc ++ [Elem]
                                             end 
                                            end, [], ExtraPath),
-            expand_links(FilteredExtraPath, H, S0) ++ expand_links(T, PreId, S0)
+            expand_links(FilteredExtraPath, H, NLeaves, Paths) ++ expand_links(T, PreId, NLeaves, Paths)
     end.
 
 intersect([], _List2) ->
@@ -379,13 +386,13 @@ contains(Id, [H|T]) ->
             contains(Id, T)
     end.
 
-replication_groups_from_file(Device, Dict0)->
+replication_groups_from_file(Device, Table)->
     case file:read_line(Device) of
         eof ->
-            Dict0;
+            ok;
         {error, Reason} ->
             lager:error("Problem reading ~p file, reason: ~p", [?GROUPSFILE, Reason]),
-            Dict0;
+            {error, Reason};
         {ok, Line} ->
             [H|T] = string:tokens(hd(string:tokens(Line,"\n")), ","),
             ReplicationGroup = lists:foldl(fun(Elem, Acc) ->
@@ -393,8 +400,8 @@ replication_groups_from_file(Device, Dict0)->
                                             Acc ++ [Int]
                                            end, [], T),
             {Key, []} = string:to_integer(H),
-            Dict1 = dict:store(Key, ReplicationGroup, Dict0),
-            replication_groups_from_file(Device, Dict1)
+            true = ets:insert(Table, {Key, ReplicationGroup}),
+            replication_groups_from_file(Device, Table)
     end.
 
 tree_from_file(Device, Counter, LeavesLeft, Tree0, Path0)->
@@ -463,15 +470,18 @@ find_internal([H|T], Counter, NLeaves) ->
             end
     end.
 
-find_key([], _MyId) ->
-    {error, not_found};
-
-find_key([{Key, Ids}|Rest], MyId) ->
-    case lists:member(MyId, Ids) of
-        true ->
-            {ok, Key};
-        false ->
-            find_key(Rest, MyId)
+find_key(Key, Groups, MyId) ->
+    case Key of
+        '$end_of_table' ->
+            {error, not_found};
+        _ ->
+            [{Key, Ids}] = ets:lookup(Groups, Key),
+            case lists:member(MyId, Ids) of
+                true ->
+                    {ok, Key};
+                false ->
+                    find_key(ets:next(Groups, Key), Groups, MyId)
+            end
     end.
 
 distance_datanodes(Tree, MyId, Id) ->
@@ -494,12 +504,13 @@ interested_test() ->
     P3 = dict:store(8,[3,9,10],P2),
     P4 = dict:store(9,[4,5,8],P3),
     P5 = dict:store(10,[7,8],P4),
-    Groups = dict:store(3, [0,1,3], dict:new()),
-    ?assertEqual(true, interested(0, 3, 6, #state{groups=Groups, nleaves=6, paths=P5})),
-    ?assertEqual(false, interested(2, 3, 7, #state{groups=Groups, nleaves=6, paths=P5})),
-    ?assertEqual(true, interested(7, 3, 10, #state{groups=Groups, nleaves=6, paths=P5})),
-    ?assertEqual(false, interested(9, 3, 8, #state{groups=Groups, nleaves=6, paths=P5})).
-    
+    Groups = ets:new(test, [set, named_table]),
+    true = ets:insert(Groups, {3, [0,1,3]}),
+    ?assertEqual(true, interested(0, 3, 6, Groups, 6, P5)),
+    ?assertEqual(false, interested(2, 3, 7, Groups, 6, P5)),
+    ?assertEqual(true, interested(7, 3, 10, Groups, 6, P5)),
+    ?assertEqual(false, interested(9, 3, 8, Groups, 6, P5)),
+    true = ets:delete(Groups).
 
 expand_links_test() ->
     P1 = dict:store(6,[0,1,7],dict:new()),
@@ -507,13 +518,13 @@ expand_links_test() ->
     P3 = dict:store(8,[3,9,10],P2),
     P4 = dict:store(9,[4,5,8],P3),
     P5 = dict:store(10,[7,8],P4),
-    Result1 = expand_links([6], 0, #state{nleaves=6, paths=P5}),
+    Result1 = expand_links([6], 0, 6, P5),
     ?assertEqual([1,2,3,4,5], lists:sort(Result1)),
-    Result2 = expand_links([7], 2, #state{nleaves=6, paths=P5}),
+    Result2 = expand_links([7], 2, 6,P5),
     ?assertEqual([0,1,3,4,5], lists:sort(Result2)),
-    Result3 = expand_links([7,8], 10, #state{nleaves=6, paths=P5}),
+    Result3 = expand_links([7,8], 10, 6, P5),
     ?assertEqual([0,1,2,3,4,5], lists:sort(Result3)),
-    Result4 = expand_links([7], 10, #state{nleaves=6, paths=P5}),
+    Result4 = expand_links([7], 10, 6, P5),
     ?assertEqual([0,1,2], lists:sort(Result4)).
 
 intersect_test() ->
@@ -532,12 +543,14 @@ contains_test() ->
 
 replication_groups_from_file_test() ->
     {ok, GroupsFile} = file:open(?GROUPSFILE_TEST, [read]),
-    RGroups = replication_groups_from_file(GroupsFile, dict:new()),
+    Test = ets:new(test, [set, named_table]),
+    ok = replication_groups_from_file(GroupsFile, Test),
     file:close(GroupsFile),
-    ?assertEqual(3,length(dict:fetch_keys(RGroups))),
-    ?assertEqual([1,2],dict:fetch(0, RGroups)),
-    ?assertEqual([2,3],dict:fetch(1, RGroups)),
-    ?assertEqual([3,4],dict:fetch(2, RGroups)).
+    ?assertEqual(3,ets:info(Test, size)),
+    ?assertEqual([{0,[1,2]}],ets:lookup(Test, 0)),
+    ?assertEqual([{1,[2,3]}],ets:lookup(Test, 1)),
+    ?assertEqual([{2,[3,4]}],ets:lookup(Test, 2)),
+    true = ets:delete(Test).
 
 tree_from_file_test() ->
     {ok, TreeFile} = file:open(?TREEFILE_TEST, [read]),
