@@ -28,6 +28,8 @@
          get_closest_dcid/1,
          get_all_nodes/0,
          get_all_nodes_but_myself/0,
+         get_delay_leaf/0,
+         get_delays_internal/0,
          do_replicate/1]).
 
 -record(state, {groups,
@@ -96,6 +98,12 @@ get_all_nodes() ->
 
 get_all_nodes_but_myself() ->
     gen_server:call(?MODULE, get_all_nodes_but_myself, infinity).
+
+get_delay_leaf() ->
+    gen_server:call(?MODULE, get_delay_leaf, infinity).
+
+get_delays_internal() ->
+    gen_server:call(?MODULE, get_delay_internal, infinity).
     
     
 init([]) ->
@@ -143,6 +151,30 @@ handle_call(get_bucket_sample, _From, S0=#state{myid=MyId, groups=Groups}) ->
 handle_call({set_treedict, Tree, Leaves}, _From, S0) ->
     Paths = path_from_tree_dict(Tree, Leaves),
     {reply, ok, S0#state{paths=Paths, tree=Tree, nleaves=Leaves}};
+
+handle_call(get_delay_leaf, _From, S0=#state{tree=Tree, myid=MyId, nleaves=NLeaves}) ->
+    Row = dict:fetch(MyId, Tree),
+    Internal = find_internal(Row, 0, NLeaves),
+    Delay = lists:nth(Internal+1, Row),
+    {reply, {ok, Delay}, S0};
+
+handle_call(get_delays_internal, _From, S0=#state{tree=Tree, myid=MyId}) ->
+    Row = dict:fetch(MyId, Tree),
+    {Delays, _} = lists:foldl(fun(Entry, {Dict, C}) ->
+                                case Entry >= 0 of
+                                    true ->
+                                        {dict:store(C, Entry), C+1};
+                                    false ->
+                                        {Dict, C+1}
+                                end
+                              end, {dict:new(), 0}, Row),
+    case dict:size(Delays) > 3 of
+        true ->
+            lager:error("Tree is not binary: ~p: ~p", [MyId, Row]),
+            {reply, {error, no_binary_tree}, S0};
+        false ->
+            {reply, {ok, Delays}, S0}
+    end;
 
 handle_call({set_groupsdict, RGroups}, _From, S0=#state{groups=Groups}) ->
     true = ets:delete_all_objects(Groups),
@@ -393,6 +425,8 @@ replication_groups_from_file(Device, Table)->
         {error, Reason} ->
             lager:error("Problem reading ~p file, reason: ~p", [?GROUPSFILE, Reason]),
             {error, Reason};
+        {ok, "\n"} ->
+            replication_groups_from_file(Device, Table);
         {ok, Line} ->
             [H|T] = string:tokens(hd(string:tokens(Line,"\n")), ","),
             ReplicationGroup = lists:foldl(fun(Elem, Acc) ->
@@ -456,7 +490,8 @@ path_from_tree_dict(Tree, Leaves) ->
 
 is_leaf(Id, Total) ->
     Id<Total.
-      
+
+
 find_internal([H|T], Counter, NLeaves) ->
     case (Counter<NLeaves) of
         true ->
