@@ -103,16 +103,18 @@ get_delay_leaf() ->
     gen_server:call(?MODULE, get_delay_leaf, infinity).
 
 get_delays_internal() ->
-    gen_server:call(?MODULE, get_delay_internal, infinity).
+    gen_server:call(?MODULE, get_delays_internal, infinity).
     
     
 init([]) ->
+    lager:info("Groups file: ~p", [?GROUPSFILE]),
     {ok, GroupsFile} = file:open(?GROUPSFILE, [read]),
     Name = list_to_atom(atom_to_list(node()) ++ atom_to_list(rgroups_saturn)),
     RGroups = ets:new(Name, [set, named_table]),
     ok = replication_groups_from_file(GroupsFile, RGroups),
     file:close(GroupsFile),
      
+    lager:info("Tree file: ~p", [?TREEFILE]),
     {ok, TreeFile} = file:open(?TREEFILE, [read]),
     case file:read_line(TreeFile) of
         eof ->
