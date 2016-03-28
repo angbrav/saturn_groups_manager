@@ -165,7 +165,7 @@ handle_call(get_delays_internal, _From, S0=#state{tree=Tree, myid=MyId}) ->
     {Delays, _} = lists:foldl(fun(Entry, {Dict, C}) ->
                                 case Entry >= 0 of
                                     true ->
-                                        {dict:store(C, Entry), C+1};
+                                        {dict:store(C, Entry, Dict), C+1};
                                     false ->
                                         {Dict, C+1}
                                 end
