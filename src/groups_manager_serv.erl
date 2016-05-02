@@ -513,7 +513,6 @@ find_key(Key, Groups, MyId) ->
             {error, not_found};
         _ ->
             [{Key, Ids}] = ets:lookup(Groups, Key),
-            lager:info("Key: ~p, Ids: ~p, MyId: ~p", [Key, Ids, MyId]),
             case lists:member(MyId, Ids) of
                 true ->
                     {ok, Key};
