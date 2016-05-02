@@ -235,7 +235,7 @@ handle_call({do_replicate, BKey}, _From, S0=#state{groups=Groups, myid=MyId}) ->
                 true ->
                     {reply, true, S0};
                 false ->
-                    lager:info("Node: ~p does not replicate: ~p (Replicas: ~p)", [MyId, BKey, Value]),
+                    %lager:info("Node: ~p does not replicate: ~p (Replicas: ~p)", [MyId, BKey, Value]),
                     {reply, false, S0}
             end
     end;
@@ -513,6 +513,7 @@ find_key(Key, Groups, MyId) ->
             {error, not_found};
         _ ->
             [{Key, Ids}] = ets:lookup(Groups, Key),
+            lager:info("Key: ~p, Ids: ~p, MyId: ~p", [Key, Ids, MyId]),
             case lists:member(MyId, Ids) of
                 true ->
                     {ok, Key};
